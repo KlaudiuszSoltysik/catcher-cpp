@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <cmath>
+#include <string>
 
 #include "rclcpp/rclcpp.hpp"
 #include "turtlesim/msg/pose.hpp"
@@ -77,16 +78,12 @@ class Catcher : public rclcpp::Node {
     double frog_x;
     double frog_y;
 
-    double goal_theta;
-
-    double delta_x = 0;
-    double old_delta_x = 0;
+    double delta_d = 0;
+    double old_delta_d = 0;
     
     double delta_theta = 0;
     double old_delta_theta = 0;
-
-    double I_x = 0;
-    double I_theta = 0;
+    std::string turn;
 
     void send_spawn_frog_req() {
       auto req = std::make_shared<turtlesim::srv::Spawn::Request>();
@@ -112,17 +109,30 @@ class Catcher : public rclcpp::Node {
 
       frog_x = (std::rand() % 101) / 10 + 0.5;
       frog_y = (std::rand() % 101) / 10 + 0.5;
-      double frog_theta = (std::rand() % 629) / 100;
 
       auto req = std::make_shared<turtlesim::srv::TeleportAbsolute::Request>();
       
       req->x = frog_x;
       req->y = frog_y;
-      req->theta = frog_theta;
+      req->theta = (std::rand() % 629) / 100;
 
       teleport_cli->async_send_request(req);
 
-      goal_theta = std::atan2(frog_y - turtle_pose.y, frog_x - turtle_pose.x);
+      delta_theta = std::atan2(frog_y - turtle_pose.y, frog_x - turtle_pose.x) - turtle_pose.theta;
+
+      while(delta_theta > 2 * M_PI) {
+        delta_theta -= 2 * M_PI;
+      }
+
+      while(delta_theta < -2 * M_PI) {
+        delta_theta += 2 * M_PI;
+      }
+
+      if(delta_theta > 0) {
+        turn = "left";
+      } else {
+        turn = "right";
+      }
     }
 
     void turtle_pose_sub_callback(const turtlesim::msg::Pose & msg) {
@@ -130,55 +140,52 @@ class Catcher : public rclcpp::Node {
     }
 
     void main_loop() {
-      old_delta_x = delta_x;
+      old_delta_d = delta_d;
       old_delta_theta = delta_theta;
 
-      delta_x = frog_x - turtle_pose.x;
-      delta_theta = goal_theta - turtle_pose.theta;
+      delta_d = sqrt(pow(frog_x - turtle_pose.x, 2) + pow(frog_y - turtle_pose.y, 2));
+      delta_theta = std::atan2(frog_y - turtle_pose.y, frog_x - turtle_pose.x) - turtle_pose.theta;
+
+      while(delta_theta > 2 * M_PI) {
+        delta_theta -= 2 * M_PI;
+      }
+
+      while(delta_theta < -2 * M_PI) {
+        delta_theta += 2 * M_PI;
+      }
+
+      if(turn == "right" && abs(delta_theta) > 2) {
+        delta_theta = 2 * M_PI - delta_theta;
+      } else if(turn == "left" && abs(delta_theta) > 2) {
+        delta_theta = -2 * M_PI + delta_theta;
+      } 
       
-      double P_x = delta_x;
+      double P_x = delta_d;
       double P_theta = delta_theta;
 
-      I_x = I_x + (1 / 30) * delta_x;
-      I_theta = I_theta + (1 / 30) * delta_theta;
+      double I_d = (1 / 30) * delta_d;
+      double I_theta = (1 / 30) * delta_theta;
 
-      double D_x = (delta_x - old_delta_x) / (1 / 30.0);
+      double D_x = (delta_d - old_delta_d) / (1 / 30.0);
       double D_theta = (delta_theta - old_delta_theta) / (1 / 30.0);
 
       auto msg = geometry_msgs::msg::Twist();
       
-      msg.linear.x = 1 * P_x + 1 * I_x + D_x;
-      msg.angular.z = 0.1 * P_theta + 0.1 * I_theta + 0.1 * D_theta;
+      msg.linear.x = 2 * P_x + 0.2 * I_d + 0.01 * + D_x;
+      msg.angular.z = 5 * P_theta + 0.05 * I_theta + 0.05 * D_theta;
 
-      turtle_pose_pub->publish(msg);
-
-      if(sqrt(pow(delta_x, 2) + pow(frog_y - turtle_pose.y, 2)) < 0.05) {
+      if(delta_d < 0.5) {
+        turn = "";
         send_teleport_frog_req();
 
-        I_x = 0;
-        I_theta = 0;
+        msg.linear.x = 0;
+        msg.angular.z = 0;
       }
+
+      turtle_pose_pub->publish(msg);
     }
 };
 
-
-// class PID_controller {
-//   public:
-//     PID_controller(double Kp, double Ki, double Kd) : Kp(Kp), Ki(Ki), Kd(Kd) {};
-
-//     double Kp;
-//     double Ki;
-//     double Kd;
-//     double old_feedback;
-
-//     double control(double feedback) {
-//       control = 0.0;
-
-//       old_feedback = feedback;
-
-//       return control;
-//     }
-// }
 
 int main(int argc, char * argv[])
 {
